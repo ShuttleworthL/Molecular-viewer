@@ -61,13 +61,11 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
         #begin seraching for bonds in front
         j = i + len(symbol)
         branch_skipped = False #checks if a branch has been skipped (to ensure the bond after is still included despite not being adjacent)
-        ring_skipped = False #checks if a ring has been skipped (to ensure the bond after is still included despite not being adjacent)
         while j < len(smiles_input): #from next char after end of atomic symbol, to end of smiles input
 
             if smiles_input[j].isalpha() and smiles_input[j].isupper():
-                if j != i+len(symbol) and not branch_skipped and not ring_skipped: #if theres a new element but its not directly after the current element (doesnt apply if you skipped over a branch or ring)
-                    branch_skipped = False #prevents infinate bonding after branch
-                    ring_skipped = False #prevents infinate bonding after ring
+                if j != i+len(symbol) and not branch_skipped: #if theres a new element but its not directly after the current element (doesnt apply if you skipped over a branch)
+                    branch_skipped = False #prevents infinate bonding after branchng
                     break #all bonds are already collected
         
                 else: #if there is a new element but it is directly after the current element
@@ -99,16 +97,19 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                             "symbol": f"{smiles_input[j+1]}", #1 char symbol in front of bond
                             "type": f"{smiles_input[j]}" #representing the double or triple bond
                         })
+                    break #all bond collected
                 elif smiles_input[j+1] == "(": #if double or triple bonded to branch
                     b = j+2 #start of branch
                     closes = 1 #number of ) to find before stopping (avoids stopping at the end of a nested branch instead of main branch)
                     branch = "" #string of collected branch elements
+                    branch += smiles_input[j+1] #record branch start
                     while True: #loop through until you reach the end of the branch
                         if smiles_input[b] == "(":
                             closes += 1 #an additionally close bracket is required to complete branch if a nested branch is detected
                         elif smiles_input[b] == ")":
                             closes -= 1 #1 closer to completing branch
                             if closes == 0:
+                                branch += smiles_input[b] #record end bracket
                                 break #avoids including the end bracket if it is the true end of the main branch
                         branch += smiles_input[b]
                         b+=1
@@ -122,24 +123,6 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                     branch_skipped = True
                     continue #return to top
 
-                elif smiles_input[j+1].isnumeric(): #e.g. 1,2,3,4 ect (indicating start of a ring)
-                    ring_start = smiles_input[j+1] #record number of ring start to find the end of the ring later
-                    r = j+2 #start of ring
-                    ring = "" #string of collected ring elements
-                    while smiles_input[r] != ring_start: #loop through until you reach the end of the ring
-                        ring += smiles_input[r]
-                        r+=1
-                    #after collecting branch terms
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [j,r], #bounds of ring
-                        "symbol": f"{ring}", #collection of symbols inside ring (to be parsed later)
-                        "type": f"{smiles_input[j]}" #representing the double or triple bond
-                    })
-                    j=r+1 #skip past ring
-                    ring_skipped = True
-                    continue #return to top
-                break #all bonds collected
-
             elif smiles_input[j] == ")":
                 break #prevents bonding outside of branch (assuming th eelement is in side tha branch due to no "(" being detected first)
 
@@ -147,12 +130,14 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                 b = j+1 #start of branch
                 closes = 1 #number of ) to find before stopping (avoids stopping at the end of a nested branch instead of main branch)
                 branch = "" #string of collected branch elements
+                branch += smiles_input[j] #record start bracket
                 while True: #loop through until you reach the end of the branch
                     if smiles_input[b] == "(":
                         closes += 1 #an additionally close bracket is required to complete branch if a nested branch is detected
                     elif smiles_input[b] == ")":
                         closes -= 1 #1 closer to completing branch
                         if closes == 0:
+                            branch += smiles_input[b] #record end bracket
                             break #avoids including the end bracket if it is the true end of the main branch
                     branch += smiles_input[b]
                     b+=1
@@ -165,23 +150,6 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                 j=b+1 #skip past branch
                 branch_skipped = True
                 continue #return to top
-
-            elif smiles_input[j].isnumeric(): #e.g. 1,2,3,4 ect (indicating start of a ring)
-                ring_start = smiles_input[j] #record number of ring start to find the end of the ring later
-                r = j+1 #start of ring
-                ring = "" #string of collected ring elements
-                while smiles_input[r] != ring_start: #loop through until you reach the end of the ring
-                    ring += smiles_input[r]
-                    r+=1
-                #after collecting branch terms
-                arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                    "location": [j,r], #bounds of ring
-                    "symbol": f"{ring}", #collection of symbols inside ring (to be parsed later)
-                    "type": "-" #single bonds are infered
-                })
-                j=r+1 #skip past ring
-                ring_skipped = True
-                continue #return to top
             j += 1 #increment while loop
 
                 
@@ -191,9 +159,8 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
         while j > -1: #from the char before the atomic symbol, to start of smiles input
 
             if smiles_input[j].isalpha(): #doesnt check if its upper becuse it still indicates new element 1 char or 2 char
-                if j != i-1 and not branch_skipped and not ring_skipped: #if theres a new element but its not directly before the current element (doesnt apply if you skipped over a branch or ring)
+                if j != i-1 and not branch_skipped: #if theres a new element but its not directly before the current element (doesnt apply if you skipped over a branch)
                     branch_skipped = False #prevents infinate bonding after branch
-                    ring_skipped = False #prevents infinate bonding after ring
                     break #all bonds are already collected
         
                 else: #if there is a new element but it is directly before the current element
@@ -201,46 +168,59 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                         arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
                             "location": [j-1,j], #bounds of element symbol
                             "symbol": f"{smiles_input[j-1]+smiles_input[j]}",
-                            "type": bond_type #preserved fromm skipping branch/ ring or "-" if not
+                            "type": bond_type #preserved fromm skipping branch or "-" if not
                         })
                     else: #if 1 char symbol
                         arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
                             "location": [j],
                             "symbol": f"{smiles_input[j]}",
-                            "type": bond_type #preserved fromm skipping branch/ ring or "-" if not
+                            "type": bond_type #preserved fromm skipping branch or "-" if not
                         })
                     break #all bonds are collected
 
             elif smiles_input[j] == "(" and j == i-1: #meaning element is leftmost in the branch so can bond with what bonded to branch
-                if smiles_input[j-1].isalpha() and smiles_input[j-1].islower(): #2 char symbol and implied single bond
+                if smiles_input[j-1] == "#" or smiles_input[j-1] == "=" or smiles_input[j-1] == "-": #if element bonded to branch has an explicit bond
+                    if smiles_input[j-2].isalpha() and smiles_input[j-2].islower(): #2char symbol before explicit bond
+                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
+                            "location": [j-3,j-2],
+                            "symbol": f"{smiles_input[j-3]+smiles_input[j-2]}",
+                            "type": f"{smiles_input[j-1]}"
+                        })
+                    elif smiles_input[j-2].isalpha() and smiles_input[j-2].isupper(): #1char symbol before explicit bond
+                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
+                            "location": [j-2],
+                            "symbol": f"{smiles_input[j-2]}",
+                            "type": f"{smiles_input[j-1]}"
+                        })
+                elif smiles_input[j-1].isalpha() and smiles_input[j-1].islower(): #2char symbol before branch (implicit bond)
                     arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
                         "location": [j-2,j-1],
-                        "symbol": f"{smiles_input[j-2]+smiles_input[j-1]}",
-                        "type": "-"
+                        "symbol": f"{smiles_input[j-2]}{smiles_input[j-1]}",
+                        "type": "-" #implicit single bond
                     })
-                elif smiles_input[j-1].isalpha() and smiles_input[j-1].upper(): #1 char symbol and implied single bond
+                elif smiles_input[j-1].isalpha() and smiles_input[j-1].isupper(): #1char symbol before branch (implicit bond)
                     arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
                         "location": [j-1],
                         "symbol": f"{smiles_input[j-1]}",
-                        "type": "-"
+                        "type": "-" #implicit single bond
                     })
                 break #all bonds are collected
 
             elif smiles_input[j] == "-" or smiles_input[j] == "=" or smiles_input[j] == "#": #if curent char is an equals or a hashtag (indicating a double bond or triple bond) or an explicit "-"
                 bond_type = smiles_input[j]
-                if smiles_input[j-1].isalpha() and smiles_input[j-1].isupper():
-                    if smiles_input[j-2].isalpha() and smiles_input[j-2].islower():
+                if j > 0 and smiles_input[j-1].isalpha() and smiles_input[j-1].islower():
+                    if j > 1 and smiles_input[j-2].isalpha() and smiles_input[j-2].isupper():
                         arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
                             "location": [j-2,j-1],
                             "symbol": f"{smiles_input[j-2]+smiles_input[j-1]}", #2 char symbol behind of bond
                             "type": bond_type #representing the double or triple bond
                         })
-                    else: #1 char symbol after bond
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j-1],
-                            "symbol": f"{smiles_input[j-1]}", #1 char symbol behind of bond
-                            "type": bond_type #representing the double or triple bond
-                        })
+                elif j > 0 and smiles_input[j-1].isalpha() and smiles_input[j-1].isupper(): #1 char symbol after bond
+                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
+                        "location": [j-1],
+                        "symbol": f"{smiles_input[j-1]}", #1 char symbol behind of bond
+                        "type": bond_type #representing the double or triple bond
+                    })
                 elif smiles_input[j-1] == ")": #if double or triple bonded to branch
                     b = j-2 #end of branch
                     closes = 1 #number of ) to find before stopping (avoids stopping at the start of a nested branch instead of main branch)
@@ -256,24 +236,6 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                     branch_skipped = True
                     continue #return to top
 
-                elif smiles_input[j-1].isnumeric(): #e.g. 1,2,3,4 ect (indicating end of a ring)
-                    ring_start = smiles_input[j-1] #record number of ring end to find the start of the ring later
-                    r = j-2 #end of ring
-                    ring = "" #string of collected ring elements
-                    while smiles_input[r] != ring_start: #loop through until you reach the start of the ring
-                        ring += smiles_input[r]
-                        r-=1
-                    #after collecting branch terms
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [r,j], #bounds of ring
-                        "symbol": f"{ring}", #collection of symbols inside ring (to be parsed later)
-                        "type": f"{smiles_input[j]}" #representing the double or triple bond
-                    })
-                    j=r-2 #skip past ring
-                    ring_skipped = True
-                    continue #return to top
-                break #all bonds collected (doesnt include ring or branch skips due to "continue")
-
             elif smiles_input[j] == ")": #if curent char is an open bracket (indicating end of a branch)
                 b = j-1 #end of branch
                 closes = 1 #number of ) to find before stopping (avoids stopping at the start of a nested branch instead of main branch)
@@ -288,23 +250,6 @@ for i in range(len(smiles_input)): #for every symbol in smiles input
                 j=b-1 #skip past branch
                 branch_skipped = True
                 continue #return to top
-
-            elif smiles_input[j].isnumeric(): #e.g. 1,2,3,4 ect (indicating end of a ring)
-                ring_start = smiles_input[j] #record number of ring end to find the start of the ring later
-                r = j-1 #end of ring
-                ring = "" #string of collected ring elements
-                while smiles_input[r] != ring_start: #loop through until you reach the startof the ring
-                    ring += smiles_input[r]
-                    r-=1
-                #after collecting branch terms
-                arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                    "location": [r, j], #bounds of ring
-                    "symbol": f"{ring}", #collection of symbols inside ring (to be parsed later)
-                    "type": "-" #single bonds are infered
-                })
-                j=r-1 #skip past ring
-                ring_skipped = True
-                continue #return to top
             j -= 1 #increment while loop
 
 print(arrangment)
@@ -313,5 +258,11 @@ print(arrangment)
 
 
 
-#-bugs to fix:
-#need to redo ring handeling because i treated them like branches because im a dumbass (luckily theyre easier than branches)
+#To-do:
+#remove whitespace on input 1st
+#handle branch bonds in format C(=O) rather than exclusivly C=(O) as both are valid syntax 2nd
+#impliment ring handeling 3rd
+#fill in implicit hydrogens using valences 4th
+#calculate structure and arrangment using dictionary (including bond angles) 5th
+#render in 3d (dont use openGL it is too complicated for a small use) 6th
+#add more validation e.g. for missing brackets ot in future ring closes 7th
