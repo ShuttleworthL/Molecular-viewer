@@ -1,7 +1,30 @@
-from mendeleev import element
-import sys
+from mendeleev import element #for extracting infomation regarding elements e.g. valence
+import sys #for ending program
+import csv #for tsv parsing of chemical names and smiles codes dataset
+import urllib.request #for url retrieval from pubchem api
+import urllib.parse
+import json
+
+#<=======================input=======================>
+
+
+smiles_input = input("Please input a molecule's name (all caps) or its code in SMILES format: -Note metals are not currently supported in this version and molecular names have to be entered in all capitals").replace(" ", "") # takes in input and removes all white space throughout
+if smiles_input.isalpha() and smiles_input.isupper(): #checks if whole string is all caps and all aplphabetical (meaning molecular name isntead of smiles code)
+    smiles_input =  urllib.parse.quote(smiles_input) #makes the smile input safe for url
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{smiles_input}/property/ConnectivitySMILES/JSON" #url to retrieve smiles code for molecule name 
+    try:
+        response = urllib.request.urlopen(url, timeout=10) #send api request to url(pubchem) -(wait maximum of 10s before raising timeout error)
+        data = json.loads(response.read().decode("utf-8")) #read and decode api data
+        print(data)
+    except: #if error fetching smiles data
+        print("Molecule name not recognised or found in database, please check your spelling or variation of the molecular name and try again, or enter manually using SMILES formatting")
+        sys.exit()
+
+smiles_input = data["PropertyTable"]["Properties"][0]["ConnectivitySMILES"] #path to the smiles code from api result
 
 #<=======================validation=======================>
+
+print("retrieving moecular data...")
 
 non_metal_series = [ #series that make up the non metals (used to exclude metals)
     "Noble gases",
@@ -9,249 +32,155 @@ non_metal_series = [ #series that make up the non metals (used to exclude metals
     "Nonmetals", #(not currently including metaloids due to diffrent rules)
 ]
 
-smiles_input = input("please input a molecule in SMILES format: -Note metals are not currently supported in this version").replace(" ", "") # takes in input and removes all white space throughout
 elements_included = [] #list of element symbols in order of mention in smiles input
 valences = [] #list of element valences (in alignment order to "elements_included")
 for i in range(len(smiles_input)):
     if smiles_input[i].isalpha() and smiles_input[i].isupper(): #if current string position is alphabetical and uppercase (signaling start of a periodic symbol)
-        if len(smiles_input) > 1: #if there actually are more than 1 chars
-            if i + 1 < len(smiles_input) and  smiles_input[i+1].isalpha() and smiles_input[i+1].islower(): #if next character is again alphabetical but lowercase (meaning a 2 char periodic symbol) (i + 1 < len(smiles_input) prevents checkign for 2 char if it is the last value in input)
-                symbol = smiles_input[i] + smiles_input[i+1] #combine strings to form full periodic symbol
-                elements_included.append(symbol)
-            else: #if only a 1 char symbol
-                symbol = smiles_input[i]
-                elements_included.append(symbol) #only append the 1 char as it is the full symbol
-        else: #if there is only 1 char input
-            print("please include more than one element")
-            sys.exit()
+        if i + 1 < len(smiles_input) and  smiles_input[i+1].isalpha() and smiles_input[i+1].islower(): #if next character is again alphabetical but lowercase (meaning a 2 char periodic symbol) (i + 1 < len(smiles_input) prevents checkign for 2 char if it is the last value in input)
+            symbol = smiles_input[i] + smiles_input[i+1] #combine strings to form full periodic symbol
+            elements_included.append(symbol)
+        else: #if only a 1 char symbol
+            symbol = smiles_input[i]
+            elements_included.append(symbol) #only append the 1 char as it is the full symbol
 
 print(elements_included)
+valence_data = {} #store valence data during validation to minimize later queries on validated elements
 for i in elements_included: #warn about metals before exit
+    current_element = element(i) #used to minimize mendeleev queries - thus
     try: #catch error at very first instance of caling data about element (indicating no such element exists)
-        if element(i).series not in non_metal_series: #check element is non metal
+        if current_element.series not in non_metal_series: #check element is non metal
             print("Metals where detected in your SMILES input -please only use non metals (currently not including metaloids)")
             sys.exit()
-        elif element(i).series == "Noble gases": #check element is not a noble gas
+        elif current_element.series == "Noble gases": #check element is not a noble gas
             print("Noble gases where detected in your SMILES input -these do not form bonds")
             sys.exit()
+        valence_data[i] = {
+            "valence": current_element.nvalence()
+        }
     except:
-        print(f"please check you correctly spelled or entered your elements correctly, or that they actually exist: {i} is not recognised")
+        print(f"Please check you correctly spelled or entered your elements correctly, or that they actually exist: {i} is not recognised")
         sys.exit()
 
 for i in elements_included: #number of valence electrons and number of electrons needed to respect octate rule (for each element)
-    valence = element(i).nvalence()
+    valence = valence_data[i]["valence"]
     remaining = 8 - valence
+    valences.append(valence)
 
 #<=======================bonding arrangment=======================>
 
+print("decoding molecule...")
+
+def add_bond(a, b, bond_type): #function to add a bond to both parties envolved in bond
+    for x, y in ((a,b), (b,a)): #bond element a and element b from both atoms perspectives, e.g. carbon bonds with oxygen and oxygen bonds with carbon
+        arrangment[x]["bonds"].append({ #append other atom y to atoms x's bonds
+            "atom": y,
+            "location": arrangment[y]["location"], #works as we only move forward so the atom we are bonding to has already been created
+            "symbol": arrangment[y]["symbol"],
+            "bond_type": bond_type
+        })
+
 arrangment = {} #bonds dictionary with each included element haaving a list of bonds and locations and strengths
+stack = [] #list of elements before the start of a branch to bond with at the end of the branch, in order of discovary to allow for nesting
+table = {} #dictionary for elements before the start of rings to bond with at the end of the ring, addressed by number
+pending = "-" #unless otherwise stated single bonds are infered
+last = None #no previous atom yet
+count = 0 #atom number 0
 
-count = 0 #keeps track of how many elements so far
-for i in range(len(smiles_input)): #for every symbol in smiles input
+i = 0
+while i < len(smiles_input): #loop through the smiles input forwards
+    char = smiles_input[i] #current character
+    if char.isalpha() and char.isupper(): #if an uppercase alphabetical symbol (indicating start of an atomic symbol)
+        if i+1 < len(smiles_input) and smiles_input[i+1].isalpha() and smiles_input[i+1].islower(): #if smiles input is long enough to contain another char and that char is lowecase alphabetical (meaning 2 char atomic symbol)
+            symbol = char + smiles_input[i+1] #full 2char atomic symbol string
+        else:
+            symbol = char #1 char atomic symbol
 
-    if smiles_input[i].isalpha() and smiles_input[i].isupper(): #if current string position is alphabetical and uppercase (signaling start of a periodic symbol)
-        count += 1 #element found = increase count
-
-        if i + 1 < len(smiles_input) and  smiles_input[i+1].isalpha() and smiles_input[i+1].islower(): #if next character is again alphabetical but lowercase (meaning a 2 char periodic symbol) (i + 1 < len(smiles_input) prevents checkign for 2 char if it is the last value in input)
-            symbol = smiles_input[i]+smiles_input[i+1]
-        else: #1 char element
-            symbol = smiles_input[i]
-        arrangment[f"{symbol}_{count}"] = { #create element in dictionary and define its location in the smiles input and its symbol and leave space for its bonds
-            "location": list(range(i, i + len(symbol))), #lists positions it occupies
-            "symbol": f"{symbol}",
-            "bonds": []
+        count += 1 #atom discovered
+        atom = f"{symbol}_{count}" #name of the atom made up of its count and atomic symbol
+        arrangment[atom] = {
+            "symbol": symbol,
+            "location": list(range(i,i+len(symbol))), #all position the atom covers/exists in (in the string)
+            "valence": valences[count-1], #valences lsit is synced with order of atoms in smiles input
+            "bonds": [] #empty untill add bond function is called
         }
+        if not last == None: #if there is a previous element to bind with
+            add_bond(atom, last, pending) #add bond between the two atoms
+        last = atom #set the alst atom the the atom just proccesed
+        pending = "-" #reset the bond type to single as single bonds can be infered so are default
+        i += len(symbol) #move i forward by the length of the symbol
+        continue #return to top to avoid incrementing i additonally
 
-        #begin seraching for bonds in front
-        j = i + len(symbol)
-        branch_skipped = False #checks if a branch has been skipped (to ensure the bond after is still included despite not being adjacent)
-        while j < len(smiles_input): #from next char after end of atomic symbol, to end of smiles input
+    elif char in "-=#": #current character is an explicit bond
+        pending = char #set the current bond type to the char
+    elif char == "(": #begining of a branch
+        stack.append(last) #append the last verified atom to the stack (waiting for bonds outside of branch)
+    elif char == ")": #end of a branch
+        last = stack.pop() #remove the last atom from the stack as the branch it preceeded is now complete (additonally set the last element to the removded stack item, as it is able to form bonds outside the branch again)
+    elif char.isnumeric() and char not in table: #if current character is a number (indicating ring start) and is not already recorded in the dictionary
+        table[char] = {
+            "start": last, #sets the rings start value to bond with the end later
+            "start-end_bond": pending #bond before the ring number is the bond for the end ring atom
+        }
+        pending = "-" #reset pending to aovid start-end bond interprited as bond type with next ring atom
+    elif char.isnumeric() and char in table: #already recorded ring start indicating ring closure
+        start = table[char]["start"] #set start to that rings start value
+        if table[char]["start-end_bond"] != "-":
+            ring_bond = table[char]["start-end_bond"]
+        else:
+            ring_bond = pending #overwrite it with bond before ring closure (but if not mentioned it will be "-" by defualt so check if there was an explicit bond before the ring start)
+        add_bond(start, last, ring_bond) #adds bond between start and end atoms of the ring
+        table.pop(char) #removes dictionary item to allow that number to be reused later in the smiles input
+        pending = "-" #reset pending to aovid start-end bond interprited as bond type with next atom
 
-            if smiles_input[j].isalpha() and smiles_input[j].isupper():
-                if j != i+len(symbol) and not branch_skipped: #if theres a new element but its not directly after the current element (doesnt apply if you skipped over a branch)
-                    branch_skipped = False #prevents infinate bonding after branchng
-                    break #all bonds are already collected
-        
-                else: #if there is a new element but it is directly after the current element
-                    if j + 1 < len(smiles_input) and smiles_input[j+1].isalpha() and smiles_input[j+1].islower(): #if next character is again alphabetical but lowercase (meaning a 2 char periodic symbol) (j + 1 < len(smiles_input) prevents checking for 2 char if it is the last value in input)
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j,j+1], #bounds of element symbol
-                            "symbol": f"{smiles_input[j]+smiles_input[j+1]}",
-                            "type": "-" #single bonds are infered
-                        })
-                    else: #if 1 char symbol
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j],
-                            "symbol": f"{smiles_input[j]}",
-                            "type": "-" #single bonds are infered
-                        })
-                    break #all bonds are collected
+    i += 1 #increment i by 1 as all mentioned charachters where onyl 1 char long
 
-            elif smiles_input[j] == "-" or smiles_input[j] == "=" or smiles_input[j] == "#": #if curent char is an equals or a hashtag (indicating a double bond or triple bond) or an explicit "-"
-                if smiles_input[j+1].isalpha() and smiles_input[j+1].isupper():
-                    if j + 2 < len(smiles_input) and smiles_input[j+2].isalpha() and smiles_input[j+2].islower(): #(j + 2 < len(smiles_input) prevents checking for 2 char if it is the last value in input)
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j+1,j+2],
-                            "symbol": f"{smiles_input[j+1]+smiles_input[j+2]}", #2 char symbol in front of bond
-                            "type": f"{smiles_input[j]}" #representing the double or triple bond
-                        })
-                    else: #1 char symbol after bond
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j+1],
-                            "symbol": f"{smiles_input[j+1]}", #1 char symbol in front of bond
-                            "type": f"{smiles_input[j]}" #representing the double or triple bond
-                        })
-                    break #all bond collected
+#<=======================add implicit hydrogens=======================>
 
-            elif smiles_input[j] == ")":
-                break #prevents bonding outside of branch (assuming thenelement is inside tha branch due to no "(" being detected first)
+for i in list(arrangment.keys()): #iterates through every key in dictionary via a copied list of the dictionary so that hwen appending to the original dictioanry the size of the iteration list doesnt change
+    bond_types = [] #lsit of bond types per atom
+    for j in arrangment[i]["bonds"]: #iterates through every bond in the atom
+        bond_types.append(j["bond_type"]) #bond type for each bond
 
-            elif smiles_input[j] == "(": #if curent char is an open bracket (indicating start of a branch)
-                b = j+1 #start of branch
-                closes = 1 #number of ) to find before stopping (avoids stopping at the end of a nested branch instead of main branch)
-                branch = "" #string of collected branch elements
-                branch += smiles_input[j] #record start bracket
-                branch_bond = "-" #infered single bond
-                while True: #loop through until you reach the end of the branch
-                    if smiles_input[b] == "(":
-                        closes += 1 #an additionally close bracket is required to complete branch if a nested branch is detected
-                    elif smiles_input[b] == ")":
-                        closes -= 1 #1 closer to completing branch
-                        if closes == 0:
-                            branch += smiles_input[b] #record end bracket
-                            break #avoids including the end bracket if it is the true end of the main branch
-                    elif (smiles_input[b] == "-" or smiles_input[b] == "=" or smiles_input[b] == "#") and b == j+1: #explicit bond detected as first char in the branch
-                        branch_bond = smiles_input[b]
-                    branch += smiles_input[b]
-                    b+=1
-                #after collecting branch terms
-                arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                    "location": [j,b], #bounds of branch
-                    "symbol": f"{branch}", #collection of symbols inside branch (to be parsed later)
-                    "type": f"{branch_bond}"
-                })
-                j=b+1 #skip past branch
-                branch_skipped = True
-                continue #return to top
-            j += 1 #increment while loop
 
-                
-        #begin seraching for bonds behind (despite having branch logic branches are are not recorded as bonds but just skipped over to find the actuall bond on th other side) - (as branches can only be bonded with on the left side)
-        j = i -1 #doesnt need to adjust for symbol length
-        bond_type = "-" #used to preserve bond types as during the backwards scan, skipping over a branch or ring backwards does not preserve the bond type
-        while j > -1: #from the char before the atomic symbol, to start of smiles input
+    value = 0
+    for j in bond_types:
+        bonds = "-=#"
+        #total of all bond strengths (how many electrons it has gained from its covelant bonds)
+        value += bonds.index(j) + 1 #retrieves current bond type from "bond_types" list then find the index of that bond in the string "bonds" and records its index (as the string is ordered by bond strength; index+1 = what level bond it is)
+    remaining_bonds = (8-arrangment[i]["valence"]-value) #how many electrons it still needs to gain from hydrogen bonds
 
-            if smiles_input[j].isalpha(): #doesnt check if its upper becuse it still indicates new element 1 char or 2 char
-                if j != i-1 and not branch_skipped: #if theres a new element but its not directly before the current element (doesnt apply if you skipped over a branch)
-                    branch_skipped = False #prevents infinate bonding after branch
-                    break #all bonds are already collected
-        
-                else: #if there is a new element but it is directly before the current element or a branch has been skipped
-                    if smiles_input[j].isalpha() and smiles_input[j].islower(): #if previous character is again alphabetical but lowercase (meaning a 2 char periodic symbol)
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j-1,j], #bounds of element symbol
-                            "symbol": f"{smiles_input[j-1]+smiles_input[j]}",
-                            "type": bond_type #preserved fromm skipping branch or "-" if not
-                        })
-                    else: #if 1 char symbol
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j],
-                            "symbol": f"{smiles_input[j]}",
-                            "type": bond_type #preserved fromm skipping branch or "-" if not
-                        })
-                    break #all bonds are collected
 
-            elif (smiles_input[j] == "-" or smiles_input[j] == "=" or smiles_input[j] == "#") and j == i-1 and smiles_input[j-1] == "(":  #meaning element is leftmost in the branch so can bond with what bonded to branch (but explicit bond is inside branch)
-                if smiles_input[j-2].isalpha() and smiles_input[j-2].islower(): #2char symbol before branch + explicit bond
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [j-3,j-2],
-                        "symbol": f"{smiles_input[j-3]}{smiles_input[j-2]}",
-                        "type": f"{smiles_input[j]}" #explicit bond
-                    })
-                elif smiles_input[j-2].isalpha() and smiles_input[j-2].isupper(): #1char symbol before branch + explicit bond
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [j-2],
-                        "symbol": f"{smiles_input[j-2]}",
-                        "type": f"{smiles_input[j]}" #explicit bond
-                    })
-                break #all bonds are collected
-
-            elif smiles_input[j] == "(" and j == i-1: #meaning element is leftmost in the branch so can bond with what bonded to branch
-                if smiles_input[j-1].isalpha() and smiles_input[j-1].islower(): #2char symbol before branch (implicit bond)
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [j-2,j-1],
-                        "symbol": f"{smiles_input[j-2]}{smiles_input[j-1]}",
-                        "type": "-" #implicit single bond
-                    })
-                elif smiles_input[j-1].isalpha() and smiles_input[j-1].isupper(): #1char symbol before branch (implicit bond)
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [j-1],
-                        "symbol": f"{smiles_input[j-1]}",
-                        "type": "-" #implicit single bond
-                    })
-                break #all bonds are collected
-
-            elif smiles_input[j] == "-" or smiles_input[j] == "=" or smiles_input[j] == "#": #if curent char is an equals or a hashtag (indicating a double bond or triple bond) or an explicit "-"
-                bond_type = smiles_input[j]
-                if j > 0 and smiles_input[j-1].isalpha() and smiles_input[j-1].islower():
-                    if j > 1 and smiles_input[j-2].isalpha() and smiles_input[j-2].isupper():
-                        arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                            "location": [j-2,j-1],
-                            "symbol": f"{smiles_input[j-2]+smiles_input[j-1]}", #2 char symbol behind of bond
-                            "type": bond_type #representing the double or triple bond
-                        })
-                elif j > 0 and smiles_input[j-1].isalpha() and smiles_input[j-1].isupper(): #1 char symbol after bond
-                    arrangment[f"{symbol}_{count}"]["bonds"].append({ #append to the current elements bonds
-                        "location": [j-1],
-                        "symbol": f"{smiles_input[j-1]}", #1 char symbol behind of bond
-                        "type": bond_type #representing the double or triple bond
-                    })
-                elif smiles_input[j-1] == ")": #if double or triple bonded to branch
-                    b = j-2 #end of branch
-                    closes = 1 #number of ) to find before stopping (avoids stopping at the start of a nested branch instead of main branch)
-                    while True: #loop through until you reach the start of the branch
-                        if smiles_input[b] == ")":
-                            closes += 1 #an additionally open bracket is required to complete branch if a nested branch is detected
-                        elif smiles_input[b] == "(":
-                            closes -= 1 #1 closer to completing branch
-                            if closes == 0:
-                                break #avoids including the start bracket if it is the true start of the main branch
-                        b-=1
-                    j=b-1 #skip past branch
-                    branch_skipped = True
-                    continue #return to top
-
-            elif smiles_input[j] == ")": #if curent char is an open bracket (indicating end of a branch)
-                b = j-1 #end of branch
-                closes = 1 #number of ) to find before stopping (avoids stopping at the start of a nested branch instead of main branch)
-                while True: #loop through until you reach the start of the branch
-                    if smiles_input[b] == ")":
-                        closes += 1 #an additionally open bracket is required to complete branch if a nested branch is detected
-                    elif smiles_input[b] == "(":
-                        closes -= 1 #1 closer to completing branch
-                        if closes == 0:
-                            break #avoids including the start bracket if it is the true start of the main branch
-                    b-=1
-                j=b-1 #skip past branch
-                branch_skipped = True
-                continue #return to top
-            j -= 1 #increment while loop
+    j=0
+    while j < remaining_bonds:
+        symbol = "H"
+        atom = f"{symbol}_{count}"
+        arrangment[atom] = {
+            "symbol": symbol,
+            "location": "-", #no location in smiles input
+            "valence": 1, 
+            "bonds": [] #empty untill add bond function is called
+        }
+        count += 1
+        add_bond(i, atom, "-") #implicit hydrogens alwyas have single bonds
+        j+=1
 
 print(arrangment)
 
 #<=======================bond angles=======================>
 
+print("rendering...")
 
 
 ##<=======================3D render=======================>
 
 
 
-
+print("molecule render complete!")
 
 #To-do:
-#impliment ring handeling 3rd
-#fill in implicit hydrogens using valences 4th
-#calculate structure and arrangment using dictionary (including bond angles) 5th
-#render in 3d (dont use openGL it is too complicated for a small use) 6th
-#add more validation e.g. for missing brackets ot in future ring closes 7th
+#impliment ring handeling 1st
+#fill in implicit hydrogens using valences 2nd
+#calculate structure and arrangment using dictionary (including bond angles) 3rd
+#render in 3d (dont use openGL it is too complicated for a small use) 4th
+#add ability to start new molecules to define mixtures using "."
+#add more validation e.g. for missing brackets ot in future ring closes 5th
