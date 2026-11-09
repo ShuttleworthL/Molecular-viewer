@@ -1,6 +1,5 @@
 from mendeleev import element #for extracting infomation regarding elements e.g. valence
 import sys #for ending program
-import csv #for tsv parsing of chemical names and smiles codes dataset
 import urllib.request #for url retrieval from pubchem api
 import urllib.parse
 import json
@@ -9,7 +8,8 @@ import json
 
 
 smiles_input = input("Please input a molecule's name (all caps) or its code in SMILES format: -Note metals are not currently supported in this version and molecular names have to be entered in all capitals").replace(" ", "") # takes in input and removes all white space throughout
-if smiles_input.isalpha() and smiles_input.isupper(): #checks if whole string is all caps and all aplphabetical (meaning molecular name isntead of smiles code)
+
+if smiles_input.isalpha() and smiles_input.isupper() and len(smiles_input) > 1: #checks if whole string is all caps and all aplphabetical and greater than 1 charachter (meaning molecular name isntead of smiles code)
     smiles_input =  urllib.parse.quote(smiles_input) #makes the smile input safe for url
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{smiles_input}/property/ConnectivitySMILES/JSON" #url to retrieve smiles code for molecule name 
     try:
@@ -20,7 +20,7 @@ if smiles_input.isalpha() and smiles_input.isupper(): #checks if whole string is
         print("Molecule name not recognised or found in database, please check your spelling or variation of the molecular name and try again, or enter manually using SMILES formatting")
         sys.exit()
 
-smiles_input = data["PropertyTable"]["Properties"][0]["ConnectivitySMILES"] #path to the smiles code from api result
+    smiles_input = data["PropertyTable"]["Properties"][0]["ConnectivitySMILES"] #path to the smiles code from api result
 
 #<=======================validation=======================>
 
@@ -101,7 +101,10 @@ while i < len(smiles_input): #loop through the smiles input forwards
             "symbol": symbol,
             "location": list(range(i,i+len(symbol))), #all position the atom covers/exists in (in the string)
             "valence": valences[count-1], #valences lsit is synced with order of atoms in smiles input
-            "bonds": [] #empty untill add bond function is called
+            "bonds": [], #empty untill add bond function is called
+            "lone_pairs": None, #pairs of electrons not involved in bonding that occupy an electron domain
+            "azimuthal": None, #azimuthal angle from center of bonded-to element
+            "polar": None #polar angle from center of bonded-to element
         }
         if not last == None: #if there is a previous element to bind with
             add_bond(atom, last, pending) #add bond between the two atoms
@@ -134,7 +137,7 @@ while i < len(smiles_input): #loop through the smiles input forwards
 
     i += 1 #increment i by 1 as all mentioned charachters where onyl 1 char long
 
-#<=======================add implicit hydrogens=======================>
+#<=======================add implicit hydrogens + calculate lone pairs=======================>
 
 for i in list(arrangment.keys()): #iterates through every key in dictionary via a copied list of the dictionary so that hwen appending to the original dictioanry the size of the iteration list doesnt change
     bond_types = [] #lsit of bond types per atom
@@ -147,8 +150,16 @@ for i in list(arrangment.keys()): #iterates through every key in dictionary via 
         bonds = "-=#"
         #total of all bond strengths (how many electrons it has gained from its covelant bonds)
         value += bonds.index(j) + 1 #retrieves current bond type from "bond_types" list then find the index of that bond in the string "bonds" and records its index (as the string is ordered by bond strength; index+1 = what level bond it is)
-    remaining_bonds = (8-arrangment[i]["valence"]-value) #how many electrons it still needs to gain from hydrogen bonds
 
+    if arrangment[i]["symbol"]  == "H": #explicit hydrogens are only edge case to octet rule as hydrogen and helium are the only non metals with 1 shell and helium is a noble gas so cannot be considered in bonding
+        target = 2
+    else:
+        target = 8
+    remaining_bonds = (target-arrangment[i]["valence"]-value) #how many electrons it still needs to gain from hydrogen bonds
+
+    #//2 as lone "pairs" not lone electrons, as only lone pairs can occupy a electron domain
+    lone_pairs = (arrangment[i]["valence"]-(target-arrangment[i]["valence"]))//2 #how many valence elctrons it has minus how many it needs to gain (as every electron you need to gain you need to give one away to share) - thus how many electrons are not involved in bonding
+    arrangment[i]["lone_pairs"] = (lone_pairs) #set number of lone pairs
 
     j=0
     while j < remaining_bonds:
@@ -158,18 +169,46 @@ for i in list(arrangment.keys()): #iterates through every key in dictionary via 
             "symbol": symbol,
             "location": "-", #no location in smiles input
             "valence": 1, 
-            "bonds": [] #empty untill add bond function is called
+            "bonds": [], #empty untill add bond function is called
+            "lone_pairs": 0, #hydrogen has 0 lone pairs always
+            "azimuthal": None, #azimuthal angle from center of bonded-to element
+            "polar": None #polar angle from center of bonded-to element
         }
         count += 1
         add_bond(i, atom, "-") #implicit hydrogens alwyas have single bonds
         j+=1
 
-print(arrangment)
-
 #<=======================bond angles=======================>
 
 print("rendering...")
 
+for i in arrangment:
+    if arrangment[i]["symbol"] == "H": #hydrogens only form 1 electron domain(their only single bond) so bond at 180 degress regardless (this includes both explicit hydeogens and implicit hydrogens that dont have lone pair attributes to allow for accurate bond angle calculations)
+        bond_angles = [[0, 0]] #only a single bond
+    else:
+        electron_domains = len(arrangment[i]["bonds"]) + arrangment[i]["lone_pairs"] #sum of number of bonds and lone pairs
+
+        #decide the furthest possible locations for all points around the sphere (changes for number of points(electron domains)) (position 0 is azimuthal and position 1 is polar) -hardcoded for now just for simplicity
+        #doesnt take into account lone pairs other than their existance as a electron domain (e.g. no electron bullying)
+        if electron_domains == 2:
+            bond_angles = [[0, 0], [0, 180]] 
+        elif electron_domains == 3:
+            bond_angles = [[0, 0], [0, 120], [0, 240]] 
+        elif electron_domains == 4:
+            bond_angles = [[0, 0], [109.5, 0], [109.5, 120], [109.5, 240]]
+        elif electron_domains == 5:
+            bond_angles = [[0, 0], [0, 180], [0, 90], [120, 90], [240, 90]]
+        elif electron_domains == 6:
+            bond_angles = [[0, 0], [0, 180], [0, 90], [90, 90], [180, 90], [270, 90]]
+
+
+        position = 0 #which bond angle is chosen per bond
+        for j in arrangment[i]["bonds"]:
+            j["polar"] = bond_angles[position][0] #azimuthal angle from center
+            j["azimuthal"] = bond_angles[position][1] #azimuthal angle from center
+            position += 1 #move to a new bond angle
+
+print(arrangment)
 
 ##<=======================3D render=======================>
 
